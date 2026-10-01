@@ -1,0 +1,10 @@
+.ytenv/
+__pycache__/
+dist/
+build/
+logs/
+*.spec
+Downloads/
+*.log
+.DS_Store
+*.zip
