@@ -10,3 +10,7 @@ pyinstaller \
     --name VideoDownloader \
     --add-data "yt_tools:yt_tools" \
     main.py
+
+echo ""
+echo "Build completed:"
+ls -lh dist/VideoDownloader

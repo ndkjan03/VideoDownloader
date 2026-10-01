@@ -118,7 +118,6 @@ def exit_if_requested(value):
         "exit"
     ):
         print("\nBye!")
-        # sys.exit(0)
         raise SystemExit
         
     return value
@@ -129,6 +128,24 @@ def ask(prompt):
     """
     return exit_if_requested(
         input(prompt)
+    )
+
+def show_error(message):
+    """
+    Display error message and wait for user action.
+    ENTER = continue
+    Q     = quit
+    """
+
+    print("\n" + "=" * 60)
+    print("ERROR")
+    print("=" * 60)
+
+    print(message)
+
+    ask(
+        "\nPress ENTER to continue "
+        "or Q to quit..."
     )
 
 def normalize_input(user_input):
@@ -449,38 +466,30 @@ def get_info(url, playlist_limit=None):
             download=False
         )
 
-def build_opts(mode, download_dir):
+def get_base_opts(download_dir):
     """
-    Build yt-dlp download options
-    based on selected download mode.
+    Build common yt-dlp options
+    shared by all download modes.
     """
-    opts = {
-        # FFmpeg location
-        "ffmpeg_location": str(
-            FFMPEG_DIR
-        ),
-
-        # Continue if one video fails
+    return {
+        "ffmpeg_location": str(FFMPEG_DIR),
         "ignoreerrors": True,
 
-        # Cleaner console output
         "quiet": not DEBUG,
         "no_warnings": not DEBUG,
 
-        # Progress display
         "progress_hooks": [
             progress_hook
         ],
-        
+
         "remote_components": [
             "ejs:github"
         ],
-        
+
         "socket_timeout": 30,
         "retries": 10,
         "fragment_retries": 10,
 
-        # Output folder structure
         "outtmpl": str(
             download_dir /
             "%(playlist_title|Single Video)s" /
@@ -488,72 +497,72 @@ def build_opts(mode, download_dir):
         ),
     }
 
-    # --------------------------------------------------------
-    # MP4 BEST
-    # --------------------------------------------------------
+def get_mode_opts(mode):
+    """
+    Return mode-specific yt-dlp options.
+    """
     if mode == "1":
-        opts["format"] = (
-            "bestvideo+bestaudio/best"
-        )
+        return {
+            "format": "bestvideo+bestaudio/best",
+            "merge_output_format": "mp4"
+        }
 
-        opts["merge_output_format"] = "mp4"
-
-    # --------------------------------------------------------
-    # MP4 1080P
-    # --------------------------------------------------------
     elif mode == "2":
-        opts["format"] = (
-            "bestvideo[height<=1080]"
-            "+bestaudio/best"
-        )
+        return {
+            "format": "bestvideo[height<=1080]+bestaudio/best",
+            "merge_output_format": "mp4"
+        }
 
-        opts["merge_output_format"] = "mp4"
-
-    # --------------------------------------------------------
-    # MP4 720P
-    # --------------------------------------------------------
     elif mode == "3":
-        opts["format"] = (
-            "bestvideo[height<=720]"
-            "+bestaudio/best"
-        )
+        return {
+            "format": "bestvideo[height<=720]+bestaudio/best",
+            "merge_output_format": "mp4"
+        }
 
-        opts["merge_output_format"] = "mp4"
-
-    # --------------------------------------------------------
-    # MP3
-    # --------------------------------------------------------
     elif mode == "4":
-        opts["format"] = "bestaudio/best"
+        return {
+            "format": "bestaudio/best",
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "0",
+                }
+            ]
+        }
 
-        opts["postprocessors"] = [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "0",
-            }
-        ]
-
-    # --------------------------------------------------------
-    # M4A
-    # --------------------------------------------------------
     elif mode == "5":
-        opts["format"] = (
-            "bestaudio[ext=m4a]/bestaudio"
-        )
+        return {
+            "format": "bestaudio[ext=m4a]/bestaudio",
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "m4a",
+                }
+            ]
+        }
 
-        opts["postprocessors"] = [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "m4a",
-            }
-        ]
-        
-    # --------------------------------------------------------
-    # ORIGINAL AUDIO
-    # --------------------------------------------------------
     elif mode == "6":
-        opts["format"] = ("bestaudio")
+        return {
+            "format": "bestaudio"
+        }
+
+    raise ValueError(
+        f"Invalid mode: {mode}"
+    )
+
+def build_opts(mode, download_dir):
+    """
+    Merge base options and mode options
+    into final yt-dlp configuration.
+    """
+    opts = get_base_opts(
+        download_dir
+    )
+
+    opts.update(
+        get_mode_opts(mode)
+    )
 
     debug_log(
         "Download mode:",
@@ -566,18 +575,10 @@ def build_opts(mode, download_dir):
     )
 
     debug_log(
-        "FFmpeg location:",
-        opts.get("ffmpeg_location")
-    )
-    
-    debug_log(
-        "Remote Components:",
-        opts.get("remote_components")
-    )
-    debug_log(
         "Postprocessors:",
         opts.get("postprocessors")
     )
+
     return opts
 
 def show_formats(url):
@@ -695,9 +696,7 @@ def process_multi_video(urls):
     current_index = 1
     last_percent = -1
 
-    print(
-        f"\nDetected {total_items} videos"
-    )
+    print(f"\nDetected {total_items} videos")
 
     mode = get_download_mode()
 
@@ -721,103 +720,235 @@ def process_multi_video(urls):
 
         generate_playlist_reports()
     except Exception as e:
-        print("\nDOWNLOAD FAILED")
-        print(e)
+        show_error(f"DOWNLOAD FAILED\n\n{e}")
 
 # ============================================================
 # MAIN
 # ============================================================
-def main():
-    global total_items
-    
-    playlist_limit = None
+def classify_urls(urls):
+    """
+    Phân loại URL / Split URLs into:
+    - playlist URLs
+    - standalone video URLs
+    """
+    playlist_urls = []
+    video_urls = []
 
-    print("\nVideo Downloader\n")
+    for url in urls:
+        if url_has_playlist(url):
+            playlist_urls.append(url)
+        else:
+            video_urls.append(url)
 
-    urls = get_urls()
+    return playlist_urls, video_urls
 
-    if not urls:
-        print("No URL entered.")
-        return
-    
-    if len(urls) > 1:
-        process_multi_video(urls)
-        return
-    
-    url = urls[0]
-   
+def validate_url_groups(playlist_urls, video_urls):
+    """
+    Tách validate input / Validate supported URL combinations.
+    Rules:
+    - 1 playlist only
+    - OR multiple standalone videos
+    """
+    playlist_count = len(
+        playlist_urls
+    )
+
+    video_count = len(
+        video_urls
+    )
+
+    if playlist_count > 1:
+        show_error(
+            f"\nDetected:"
+            f"\n{playlist_count} playlists"
+            f"\n{video_count} videos"
+            f"\n\nOnly one playlist can be processed at a time."
+        )
+        return False
+
+    if playlist_count == 1 and video_count > 0:
+        show_error(
+            f"\nDetected:"
+            f"\n{playlist_count} playlist"
+            f"\n{video_count} videos"
+            f"\n\nCannot mix playlists and standalone videos."
+            f"\nPlease process them separately."
+        )
+        return False
+
+    return True
+
+def handle_playlist(url):
+    """
+    Detect playlist type and ask user for download scope.
+    Returns:
+        playlist_limit
+    """
+
+    try:
+        temp_info = get_info(
+            url,
+            "1"
+        )
+
+    except DownloadError as e:
+        show_error(
+            f"Cannot access playlist.\n\n{e}"
+        )
+        return None
+
+    is_mix = (
+        temp_info.get("id", "")
+        .startswith("RD")
+    )
+
+    print("\nPlaylist detected from URL")
+
+    if not is_mix:
+        try:
+            full_info = get_info(url)
+
+            print(
+                f"Videos : "
+                f"{len(full_info.get('entries', []))}"
+            )
+
+        except Exception as e:
+            debug_log(
+                "Failed to get playlist count:",
+                e
+            )
+
+    if is_mix:
+        print("\nYouTube Mix detected")
+        print(
+            "Download ALL disabled."
+        )
+
+    playlist_limit = (
+        get_playlist_download_limit(
+            allow_all=not is_mix
+        )
+    )
+
     debug_log(
-        "Normalized URL:",
+        "Playlist limit:",
+        playlist_limit
+    )
+
+    return playlist_limit
+
+def get_media_info(url, playlist_limit):
+    """
+    Retrieve metadata and handle errors.
+    """
+    try:
+        return get_info(
+            url,
+            playlist_limit
+        )
+
+    except DownloadError as e:
+        show_error(
+            f"Failed to read URL.\n\n{e}"
+        )
+        return None
+
+def download_media(url, mode, playlist_limit):
+    """
+    Execute download.
+    """
+    global current_index
+    global last_percent
+
+    # reset progress state
+    current_index = 1
+    last_percent = -1
+
+    download_dir = (
+        create_download_dir()
+    )
+
+    opts = build_opts(
+        mode,
+        download_dir
+    )
+
+    if playlist_limit:
+        opts["playlist_items"] = (
+            playlist_limit
+        )
+
+    print("\nStarting download...\n")
+
+    # --------------------------------------------------------
+    # DEBUG DOWNLOAD INFO
+    # --------------------------------------------------------
+    debug_log(
+        "DOWNLOAD START"
+    )
+
+    debug_log(
+        "URL:",
         url
     )
 
-    playlist_limit = None
+    debug_log(
+        "Mode:",
+        mode
+    )
 
-    if url_has_playlist(url):
-        try:
-            temp_info = get_info(
-                url,
-                "1"
-            )
-        except DownloadError as e:
-            print("\nCannot access playlist.")
-            print(e)
-            return
+    debug_log(
+        "Playlist Limit:",
+        playlist_limit
+    )
 
-        is_mix = (
-            temp_info.get("id", "")
-            .startswith("RD")
-        )
+    debug_log(
+        "Download Dir:",
+        download_dir
+    )
 
-        debug_log(
-            "Is Mix Playlist:",
-            is_mix
-        )
-        print("\nPlaylist detected from URL")
-        
-        # ----------------------------------------------------
-        # NORMAL PLAYLIST ONLY
-        # ----------------------------------------------------
-        if not is_mix:
-            try:
-                full_info = get_info(url)
+    debug_log(
+        "Options:",
+        opts
+    )
 
-                print(
-                    f"Videos : {len(full_info.get('entries', []))}"
-                )
-            except Exception as e:
-                debug_log(
-                    "Failed to get playlist count:",
-                    e
-                )
-
-        # ----------------------------------------------------
-        # MIX PLAYLIST
-        # ----------------------------------------------------
-        if is_mix:
-            print("\nYouTube Mix detected")
-            print("Download ALL disabled.")
-
-        playlist_limit = (
-            get_playlist_download_limit(
-                allow_all=not is_mix
-            )
-        )
-        
-        debug_log(
-            "Playlist limit:",
-            playlist_limit
-        )
-    
     try:
-        info = get_info(url, playlist_limit)
-    except DownloadError as e:
-        print("\nFailed to read URL")
-        print(e)
-        return
+        with YoutubeDL(opts) as ydl:
+            result = ydl.download(
+                [url]
+            )
+
+        generate_playlist_reports()
+
+        debug_log(
+            "Playlist reports generated"
+        )
+
+        debug_log(
+            "DOWNLOAD END",
+            result
+        )
+
+    except Exception as e:
+        show_error(
+            f"DOWNLOAD FAILED\n\n{e}"
+        )
+
+        debug_log(
+            "DOWNLOAD EXCEPTION",
+            repr(e)
+        )
+
+def show_media_info(info):
+    """
+    Display media information and update total_items.
+    """
+
+    global total_items
 
     # --------------------------------------------------------
-    # DEBUG INFO
+    # DEBUG METADATA
     # --------------------------------------------------------
     debug_log(
         "Info type:",
@@ -833,7 +964,7 @@ def main():
         "ID:",
         info.get("id")
     )
-    
+
     debug_log(
         "Extractor:",
         info.get("extractor")
@@ -844,8 +975,13 @@ def main():
         info.get("extractor_key")
     )
 
+    debug_log(
+        "Webpage URL:",
+        info.get("webpage_url")
+    )
+
     # --------------------------------------------------------
-    # PLAYLIST DETECTED
+    # PLAYLIST
     # --------------------------------------------------------
     if is_playlist(info):
         total_items = len(
@@ -853,16 +989,11 @@ def main():
         )
 
         print("\nPlaylist detected")
-        print(
-            f"Title  : {info.get('title')}"
-        )
-
-        print(
-            f"Videos : {total_items}"
-        )
+        print(f"Title  : {info.get('title')}")
+        print(f"Videos : {total_items}")
 
         debug_log(
-            "Total items:",
+            "Playlist Entries:",
             total_items
         )
 
@@ -872,66 +1003,67 @@ def main():
     else:
         total_items = 1
 
+        debug_log(
+            "Single Media"
+        )
+
+def main():
+    urls = get_urls()
+
+    if not urls:
+        show_error("No URL entered.")
+        return
+
+    playlist_urls, video_urls = (
+        classify_urls(urls)
+    )
+
+    if not validate_url_groups(
+        playlist_urls,
+        video_urls
+    ):
+        return
+
+    if len(video_urls) > 1:
+        process_multi_video(
+            video_urls
+        )
+        return
+
+    url = (
+        playlist_urls[0]
+        if playlist_urls
+        else video_urls[0]
+    )
+
+    playlist_limit = None
+
+    if url_has_playlist(url):
+        playlist_limit = (
+            handle_playlist(url)
+        )
+
+    info = get_media_info(
+        url,
+        playlist_limit
+    )
+
+    if not info:
+        return
+
+    show_media_info(info)
+
     mode = get_download_mode()
 
-    # --------------------------------------------------------
-    # SHOW FORMATS ONLY
-    # --------------------------------------------------------
     if mode == "7":
         show_formats(url)
         return
 
-    # --------------------------------------------------------
-    # BUILD OPTIONS
-    # --------------------------------------------------------
-    download_dir = create_download_dir()
-    
-    opts = build_opts(mode, download_dir)
-    
-    if playlist_limit:
-        opts["playlist_items"] = playlist_limit
-
-    # --------------------------------------------------------
-    # START DOWNLOAD
-    # --------------------------------------------------------
-    print("\nStarting download...\n")
-    debug_log(
-        "DOWNLOAD START"
+    download_media(
+        url,
+        mode,
+        playlist_limit
     )
-
-    debug_log(
-        "Options:",
-        opts
-    )
-
-    try:
-        debug_log(
-            "Selected format:",
-            opts.get("format")
-        )
-        
-        with YoutubeDL(opts) as ydl:
-            result = ydl.download([url])
-        
-        generate_playlist_reports()
-        
-        debug_log(
-            "Playlist reports generated"
-        )
-
-        debug_log(
-            "DOWNLOAD END",
-            result
-        )
-
-    except Exception as e:
-        print("\nDOWNLOAD FAILED")
-        print(e)
-
-        debug_log(
-            "DOWNLOAD EXCEPTION",
-            repr(e)
-        )
 
     print("\nDone!")
 
